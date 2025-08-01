@@ -1,77 +1,206 @@
-import pytesseract
-from PIL import Image
-from pdf2image import convert_from_path
 import cv2
 import numpy as np
+import pytesseract
+from pdf2image import convert_from_path
+from PIL import Image, ImageEnhance, ImageFilter
+import tempfile
 import os
+from typing import List, Optional
 
-def preprocess_image(image_path):
+def preprocess_image(image: Image.Image) -> Image.Image:
     """
-    Preprocess image to improve OCR accuracy
+    Enhanced image preprocessing for better OCR accuracy
+    Handles photos, scans, and low-quality images
     """
-    img = cv2.imread(image_path)
-    # Convert to grayscale
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    # Apply threshold to get image with only black and white
-    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    return thresh
+    
+    # Convert to numpy array for OpenCV processing
+    img_array = np.array(image)
+    
+    # Convert to grayscale if not already
+    if len(img_array.shape) == 3:
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = img_array
+    
+    # Apply denoising for scanned/photographed documents
+    denoised = cv2.fastNlMeansDenoising(gray)
+    
+    # Apply Gaussian blur to reduce noise
+    blurred = cv2.GaussianBlur(denoised, (1, 1), 0)
+    
+    # Apply adaptive thresholding for better text separation
+    # This works well for photos with uneven lighting
+    thresh = cv2.adaptiveThreshold(
+        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+    )
+    
+    # Apply morphological operations to clean up the image
+    kernel = np.ones((1, 1), np.uint8)
+    cleaned = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    
+    # Convert back to PIL Image
+    processed_image = Image.fromarray(cleaned)
+    
+    # Enhance contrast and sharpness
+    enhancer = ImageEnhance.Contrast(processed_image)
+    processed_image = enhancer.enhance(1.5)
+    
+    enhancer = ImageEnhance.Sharpness(processed_image)
+    processed_image = enhancer.enhance(1.2)
+    
+    return processed_image
 
-def extract_text_from_image(image_path):
+def extract_text_from_image(image_path: str) -> str:
     """
-    Extract text from image using Tesseract OCR
+    Extract text from image files (JPG, PNG, TIFF, etc.)
+    Optimized for invoice processing with preprocessing
     """
     try:
-        # Preprocess image
-        processed_img = preprocess_image(image_path)
+        # Load image
+        image = Image.open(image_path)
         
-        # Extract text
-        text = pytesseract.image_to_string(processed_img, config='--psm 6')
+        # Rotate image if needed (handle rotated phone photos)
+        image = auto_rotate_image(image)
+        
+        # Preprocess image for better OCR
+        processed_image = preprocess_image(image)
+        
+        # Configure Tesseract for better accuracy
+        custom_config = r'--oem 3 --psm 6 -c tesseract_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,()/-:@#$%&+= '
+        
+        # Extract text using Tesseract
+        text = pytesseract.image_to_string(processed_image, config=custom_config)
+        
         return text.strip()
+        
     except Exception as e:
-        return f"Error processing image: {str(e)}"
+        print(f"Error extracting text from image: {e}")
+        return ""
 
-def extract_text_from_pdf(pdf_path):
+def auto_rotate_image(image: Image.Image) -> Image.Image:
     """
-    Convert PDF to images and extract text
+    Auto-rotate image based on EXIF data (handles phone photos)
+    """
+    try:
+        # Get EXIF data
+        if hasattr(image, '_getexif'):
+            exif = image._getexif()
+            if exif is not None:
+                orientation = exif.get(274)  # 274 is the orientation tag
+                if orientation == 3:
+                    image = image.rotate(180, expand=True)
+                elif orientation == 6:
+                    image = image.rotate(270, expand=True)
+                elif orientation == 8:
+                    image = image.rotate(90, expand=True)
+    except:
+        pass  # If EXIF processing fails, continue without rotation
+    
+    return image
+
+def extract_text_from_pdf(pdf_path: str) -> str:
+    """
+    Enhanced PDF text extraction with better error handling
     """
     try:
         # Convert PDF to images
-        images = convert_from_path(pdf_path)
-        extracted_text = ""
+        pages = convert_from_path(pdf_path, dpi=300)  # Higher DPI for better quality
         
-        for i, image in enumerate(images):
-            # Save temporary image
-            temp_image_path = f"temp_page_{i}.jpg"
-            image.save(temp_image_path, 'JPEG')
-            
-            # Extract text from image
-            page_text = extract_text_from_image(temp_image_path)
-            extracted_text += f"\n--- Page {i+1} ---\n{page_text}\n"
-            
-            # Clean up temp file
-            os.remove(temp_image_path)
+        extracted_texts = []
         
-        return extracted_text.strip()
+        for page_num, page in enumerate(pages, 1):
+            print(f"Processing page {page_num}...")
+            
+            # Preprocess each page
+            processed_page = preprocess_image(page)
+            
+            # Configure Tesseract for invoices
+            custom_config = r'--oem 3 --psm 6 -c tesseract_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,()/-:@#$%&+= '
+            
+            # Extract text from this page
+            page_text = pytesseract.image_to_string(processed_page, config=custom_config)
+            
+            if page_text.strip():
+                extracted_texts.append(f"--- Page {page_num} ---\n{page_text.strip()}")
+        
+        return "\n\n".join(extracted_texts)
+        
     except Exception as e:
-        return f"Error processing PDF: {str(e)}"
+        print(f"Error processing PDF: {e}")
+        return ""
 
-def process_file(file_path):
+def process_file(file_path: str) -> str:
     """
-    Main function to process either PDF or image file
+    Enhanced file processor that handles PDFs and images
+    Automatically detects file type and applies appropriate processing
     """
-    file_extension = file_path.lower().split('.')[-1]
     
-    if file_extension == 'pdf':
-        return extract_text_from_pdf(file_path)
-    elif file_extension in ['jpg', 'jpeg', 'png', 'tiff', 'bmp']:
-        return extract_text_from_image(file_path)
-    else:
-        return "Unsupported file format"
+    if not os.path.exists(file_path):
+        return "Error: File not found"
+    
+    # Get file extension
+    file_extension = os.path.splitext(file_path)[1].lower()
+    
+    print(f"Processing file: {file_path}")
+    print(f"File type: {file_extension}")
+    
+    try:
+        # Handle PDF files
+        if file_extension == '.pdf':
+            print("Processing as PDF...")
+            return extract_text_from_pdf(file_path)
+        
+        # Handle image files
+        elif file_extension in ['.jpg', '.jpeg', '.png', '.tiff', '.tif', '.bmp', '.webp']:
+            print(f"Processing as image ({file_extension})...")
+            return extract_text_from_image(file_path)
+        
+        else:
+            return f"Error: Unsupported file type '{file_extension}'. Supported formats: PDF, JPG, JPEG, PNG, TIFF, BMP, WebP"
+    
+    except Exception as e:
+        return f"Error processing file: {str(e)}"
 
+def enhance_text_quality(text: str) -> str:
+    """
+    Post-process extracted text to improve quality
+    Handles common OCR errors and formatting issues
+    """
+    if not text:
+        return text
+    
+    # Common OCR corrections
+    corrections = {
+        '0': 'O',  # Zero to letter O in some contexts
+        'l': '1',  # Letter l to number 1 in numeric contexts
+        'S': '5',  # Letter S to number 5 in numeric contexts
+        '|': 'I',  # Pipe to letter I
+        '©': '@',  # Copyright symbol to @ in emails
+    }
+    
+    lines = text.split('\n')
+    cleaned_lines = []
+    
+    for line in lines:
+        # Remove excessive whitespace
+        line = ' '.join(line.split())
+        
+        # Skip very short lines that are likely noise
+        if len(line.strip()) < 2:
+            continue
+            
+        cleaned_lines.append(line)
+    
+    return '\n'.join(cleaned_lines)
+
+# Test function for development
 if __name__ == "__main__":
-    # Test the OCR function
-    test_file = "../data/invoices/sample_invoice.pdf"  # You'll add this
-    result = process_file(test_file)
-    print("Extracted Text:")
-    print("-" * 50)
-    print(result)
+    test_file = input("Enter path to test file: ")
+    if os.path.exists(test_file):
+        result = process_file(test_file)
+        print("\n" + "="*50)
+        print("EXTRACTED TEXT:")
+        print("="*50)
+        print(result)
+    else:
+        print("File not found!")

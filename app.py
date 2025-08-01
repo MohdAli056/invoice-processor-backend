@@ -41,54 +41,44 @@ async def health_check():
 @app.post("/process")
 async def process_invoice_api(file: UploadFile = File(...)):
     """
-    Process an uploaded invoice file (PDF or image)
-    Returns structured JSON data with extracted information
+    Enhanced endpoint that processes both PDF invoices and image files
+    Supports: PDF, JPG, JPEG, PNG, TIFF, BMP, WebP
     """
     
-    # Validate file type
-    allowed_extensions = {'.pdf', '.png', '.jpg', '.jpeg', '.tiff', '.bmp'}
-    file_extension = os.path.splitext(file.filename)[1].lower()
+    # Check file type
+    allowed_extensions = {'.pdf', '.jpg', '.jpeg', '.png', '.tiff', '.tif', '.bmp', '.webp'}
+    file_extension = os.path.splitext(file.filename.lower())[1]
     
     if file_extension not in allowed_extensions:
         raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type: {file_extension}. Allowed: {', '.join(allowed_extensions)}"
+            status_code=400, 
+            detail=f"Unsupported file type '{file_extension}'. Supported formats: PDF, JPG, JPEG, PNG, TIFF, BMP, WebP"
         )
     
+    # Create temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
+        content = await file.read()
+        temp_file.write(content)
+        temp_file_path = temp_file.name
+    
     try:
-        # Create temporary file to store uploaded file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
-            # Read and write uploaded file content
-            content = await file.read()
-            temp_file.write(content)
-            temp_file_path = temp_file.name
-        
-        # Process the invoice using your existing pipeline
+        # Process the file (PDF or image)
         result = process_invoice_end_to_end(temp_file_path)
         
-        # Clean up temporary file
-        os.unlink(temp_file_path)
+        # Add file information to result
+        result["filename"] = file.filename
+        result["file_size_bytes"] = len(content)
+        result["file_type"] = file_extension[1:].upper()  # Remove dot and uppercase
         
-        # Check if processing was successful
-        if "error" in result:
-            raise HTTPException(status_code=500, detail=result["error"])
-        
-        # Add metadata to response
-        response_data = {
-            "success": True,
-            "filename": file.filename,
-            "file_size_bytes": len(content),
-            "extracted_data": result
-        }
-        
-        return JSONResponse(content=response_data)
+        return JSONResponse(content=result)
         
     except Exception as e:
-        # Clean up temp file if it exists
-        if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
+        raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
+    
+    finally:
+        # Clean up temporary file
+        if os.path.exists(temp_file_path):
             os.unlink(temp_file_path)
-        
-        raise HTTPException(status_code=500, detail=f"Error processing invoice: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
