@@ -13,15 +13,14 @@ app = FastAPI(
     description="API for extracting structured data from invoice PDFs and images",
     version="1.0.0"
 )
-# Add CORS middleware to allow requests from React frontend
+# Add this right after: app = FastAPI(...)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # React app URL
+    allow_origins=["https://invoice-processor-frontend-d4g1.vercel.app", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 @app.get("/")
 async def root():
     """Welcome endpoint"""
