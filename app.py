@@ -93,7 +93,9 @@ async def process_invoice_api(file: UploadFile = File(...)):
 
 if __name__ == "__main__":
     import uvicorn
+    import os
     print("Starting Invoice Processing API...")
     print("API will be available at: http://localhost:8000")
     print("Interactive docs: http://localhost:8000/docs")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+
