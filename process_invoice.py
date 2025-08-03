@@ -1,72 +1,143 @@
-from ocr import process_file
-from nlp_parser import InvoiceParser
-import json
-import sys
 import os
+from typing import Dict, Optional
+from ocr import process_file as process_with_traditional_ocr
+from nlp_parser import parse_invoice_text
+from ai_processor import create_ai_processor
 
-def process_invoice_end_to_end(file_path):
+def process_invoice_end_to_end(file_path: str, use_ai: bool = True) -> Dict:
     """
-    Complete invoice processing pipeline:
-    1. Extract text using OCR
-    2. Parse structured data using NLP
-    3. Return structured JSON result
+    Enhanced invoice processing with AI and traditional OCR options
+    
+    Args:
+        file_path: Path to the invoice file
+        use_ai: True for AI processing, False for traditional OCR
+    
+    Returns:
+        Dictionary with processing results
     """
     
-    print(f"Processing invoice: {file_path}")
-    print("=" * 50)
+    # Get file info
+    file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+    filename = os.path.basename(file_path)
+    file_extension = os.path.splitext(filename)[1].lower()
     
-    # Step 1: Extract text using OCR
-    print("Step 1: Extracting text with OCR...")
-    ocr_text = process_file(file_path)
+    # Initialize result structure with detailed metadata
+    result = {
+        "success": False,
+        "filename": filename,
+        "file_size_bytes": file_size,
+        "file_type": file_extension[1:].upper(),
+        "processing_method": "unknown",
+        "processing_timestamp": __import__('datetime').datetime.now().isoformat(),
+        "extracted_data": {
+            "vendor_name": None,
+            "vendor_email": None,
+            "vendor_phone": None,
+            "invoice_number": None,
+            "invoice_date": None,
+            "po_number": None,
+            "vat_number": None,
+            "total_amount": None,
+            "subtotal": None,
+            "tax_amount": None,
+            "payment_terms": None,
+            "dates_found": []
+        },
+        "confidence_scores": {
+            "overall": None,
+            "text_quality": None,
+            "data_completeness": None
+        }
+    }
     
-    if ocr_text.startswith("Error"):
-        return {"error": ocr_text}
-    
-    print("✅ OCR extraction completed")
-    
-    # Step 2: Parse structured data
-    print("Step 2: Parsing structured data...")
-    parser = InvoiceParser()
-    structured_data = parser.parse_invoice(ocr_text)
-    
-    print("✅ Data parsing completed")
-    
-    # Step 3: Clean up the result (remove raw_text for cleaner output)
-    clean_result = {key: value for key, value in structured_data.items() if key != 'raw_text'}
-    
-    return clean_result
+    try:
+        if use_ai:
+            # Try AI processing first
+            ai_processor = create_ai_processor()
+            
+            if ai_processor:
+                print(f"🤖 Processing {filename} with AI...")
+                
+                if file_extension == '.pdf':
+                    ai_result = ai_processor.process_pdf_with_ai(file_path)
+                else:
+                    ai_result = ai_processor.process_image_with_ai(file_path)
+                
+                if ai_result.get("success"):
+                    result.update({
+                        "success": True,
+                        "processing_method": "AI (Google Gemini)",
+                        "extracted_data": ai_result.get("extracted_data", result["extracted_data"]),
+                        "confidence": ai_result.get("confidence", "high"),
+                        "ai_processing": True
+                    })
+                    
+                    print("✅ AI processing successful!")
+                    return result
+                else:
+                    print(f"❌ AI processing failed: {ai_result.get('error', 'Unknown error')}")
+                    print("🔄 Falling back to traditional OCR...")
+            else:
+                print("⚠️ AI processor not available, using traditional OCR...")
+        
+        # Traditional OCR processing (fallback or chosen method)
+        print(f"🔍 Processing {filename} with traditional OCR...")
+        
+        # Extract text using traditional OCR
+        extracted_text = process_with_traditional_ocr(file_path)
+        
+        if not extracted_text or len(extracted_text.strip()) < 10:
+            result.update({
+                "success": False,
+                "processing_method": "Traditional OCR",
+                "error": "Could not extract meaningful text from document",
+                "ai_processing": False
+            })
+            return result
+        
+        # Parse extracted text with NLP
+        parsed_data = parse_invoice_text(extracted_text)
+        
+        # Update result
+        result.update({
+            "success": True,
+            "processing_method": "Traditional OCR + NLP",
+            "extracted_data": parsed_data,
+            "confidence": "medium",
+            "extracted_text_length": len(extracted_text),
+            "ai_processing": False
+        })
+        
+        print("✅ Traditional OCR processing completed!")
+        return result
+        
+    except Exception as e:
+        result.update({
+            "success": False,
+            "processing_method": "Error",
+            "error": f"Processing failed: {str(e)}",
+            "ai_processing": use_ai
+        })
+        
+        print(f"❌ Processing error: {str(e)}")
+        return result
 
-def save_result_to_json(result, output_file):
-    """Save the processed result to a JSON file"""
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(result, f, indent=2, ensure_ascii=False)
-    print(f"✅ Results saved to: {output_file}")
-
+# Test function
 if __name__ == "__main__":
-    # Test with your sample invoice
-    invoice_path = "../data/invoices/sample_invoice.pdf"
-    
-    if not os.path.exists(invoice_path):
-        print(f"Error: Invoice file not found at {invoice_path}")
-        print("Please make sure you have a sample invoice in the data/invoices/ folder")
-        sys.exit(1)
-    
-    # Process the invoice
-    result = process_invoice_end_to_end(invoice_path)
-    
-    # Display results
-    print("\n" + "=" * 50)
-    print("📄 INVOICE PROCESSING RESULTS")
-    print("=" * 50)
-    
-    if "error" in result:
-        print(f"❌ Error: {result['error']}")
+    test_file = input("Enter path to test invoice: ")
+    if os.path.exists(test_file):
+        
+        print("\n" + "="*50)
+        print("TESTING AI PROCESSING:")
+        print("="*50)
+        ai_result = process_invoice_end_to_end(test_file, use_ai=True)
+        print(f"AI Result: {ai_result}")
+        
+        print("\n" + "="*50)
+        print("TESTING TRADITIONAL OCR:")
+        print("="*50)
+        ocr_result = process_invoice_end_to_end(test_file, use_ai=False)
+        print(f"OCR Result: {ocr_result}")
+        
     else:
-        for key, value in result.items():
-            print(f"{key.replace('_', ' ').title()}: {value}")
-    
-    # Save to JSON file
-    output_file = "processed_invoice_result.json"
-    save_result_to_json(result, output_file)
-    
-    print(f"\n🎉 Invoice processing complete!")
+        print("File not found!")

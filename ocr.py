@@ -56,20 +56,34 @@ def extract_text_from_image(image_path: str) -> str:
     Optimized for invoice processing with preprocessing
     """
     try:
+        print(f"Processing image: {image_path}")
+        
+        # Check if pytesseract is properly configured
+        try:
+            pytesseract.get_tesseract_version()
+        except Exception as e:
+            print(f"Tesseract not properly configured: {e}")
+            print("Please ensure Tesseract is installed and in your PATH")
+            return ""
+        
         # Load image
         image = Image.open(image_path)
+        print(f"Image loaded successfully: {image.size}, {image.mode}")
         
         # Rotate image if needed (handle rotated phone photos)
         image = auto_rotate_image(image)
         
         # Preprocess image for better OCR
         processed_image = preprocess_image(image)
+        print("Image preprocessing completed")
         
         # Configure Tesseract for better accuracy
-        custom_config = r'--oem 3 --psm 6 -c tesseract_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,()/-:@#$%&+= '
+        custom_config = r'--oem 3 --psm 6 -l eng --tessdata-dir "C:\\Program Files\\Tesseract-OCR\\tessdata" -c tesseract_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,()/-:@#$%&+= '
         
-        # Extract text using Tesseract
+        # Extract text using Tesseract with timeout
+        print("Starting OCR processing...")
         text = pytesseract.image_to_string(processed_image, config=custom_config)
+        print(f"OCR completed, extracted {len(text)} characters")
         
         return text.strip()
         
